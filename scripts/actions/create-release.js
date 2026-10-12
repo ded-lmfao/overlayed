@@ -5,8 +5,8 @@ export const script = async ({ context, github }) => {
     repo: context.repo.repo,
   });
 
-  const [release] = listReleases;
-  if (release.draft) {
+  const release = listReleases.find(existingRelease => existingRelease.draft);
+  if (release) {
     console.log("Skipping release creation as there is already a draft");
     console.log("Reusing:", release.id);
     return release.id;
