@@ -1,45 +1,45 @@
 import { useEffect } from "react";
-import { register, isRegistered, unregister } from "@tauri-apps/plugin-global-shortcut";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore } from "@/store";
-import { invoke } from "@tauri-apps/api/core";
 
-// TODO: make these configurable?
-const HIDE_TOGGLE_KEYBIND = "Command+Shift+G";
-const TOGGLE_PIN_KEYBIND = "Command+Shift+H";
+const HIDE_TOGGLE_KEYBIND = "CommandOrControl+Shift+G";
 
-// BUG: this is happening on the settings page!!!
-// TODO: this might need some rework to be better
+// Serialize setup and cleanup, including React StrictMode's effect replay.
+let shortcutLifecycle = Promise.resolve();
+
 export const useKeybinds = () => {
-  const { setAppVisible, visible } = useAppStore();
-
   useEffect(() => {
-    const registerKeybind = async () => {
-      if (await isRegistered(HIDE_TOGGLE_KEYBIND)) {
-        await unregister(HIDE_TOGGLE_KEYBIND);
+    if (getCurrentWebviewWindow().label !== "main") return;
+    let disposed = false;
+    const registered: string[] = [];
+    shortcutLifecycle = shortcutLifecycle.then(async () => {
+      for (const shortcut of [HIDE_TOGGLE_KEYBIND]) {
+        if (disposed) break;
+        try {
+          await register(shortcut, event => {
+            if (disposed || event.state !== "Pressed") return;
+            const { visible, setAppVisible } = useAppStore.getState();
+            setAppVisible(!visible);
+          });
+          registered.push(shortcut);
+        } catch (error) {
+          console.error(`Could not register ${shortcut}`, error);
+        }
       }
+    });
 
-      await register(HIDE_TOGGLE_KEYBIND, () => {
-        const newVisible = !visible;
-
-        // invert the current visibility
-        setAppVisible(newVisible);
+    return () => {
+      disposed = true;
+      shortcutLifecycle = shortcutLifecycle.then(async () => {
+        for (const shortcut of registered) {
+          try {
+            await unregister(shortcut);
+          } catch (error) {
+            console.error(`Could not unregister ${shortcut}`, error);
+          }
+        }
       });
     };
-
-    registerKeybind();
-  }, [visible]);
-
-  useEffect(() => {
-    const registerKeybind = async () => {
-      if (await isRegistered(TOGGLE_PIN_KEYBIND)) {
-        await unregister(TOGGLE_PIN_KEYBIND);
-      }
-
-      await register(TOGGLE_PIN_KEYBIND, () => {
-        invoke("toggle_pin");
-      });
-    };
-
-    registerKeybind();
   }, []);
 };

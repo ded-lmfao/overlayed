@@ -13,6 +13,7 @@ export const Configuration = () => {
   const { value: horizontal } = useConfigValue("horizontal");
   const { value: maxUsernameLength } = useConfigValue("maxUsernameLength");
   const { value: userScale } = useConfigValue("userScale");
+  const { value: nameSpacing } = useConfigValue("nameSpacing");
   const { value: hideTaskbarWhenPinned } = useConfigValue("hideTaskbarWhenPinned");
 
   return (
@@ -191,6 +192,33 @@ export const Configuration = () => {
           </div>
           <div className="w-16 text-right">
             <span className="text-sm">{userScale} %</span>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between h-8 mx-2">
+        <label
+          htmlFor="nameSpacing"
+          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+        >
+          Name spacing
+        </label>
+        <div className="flex items-center gap-4 w-1/2">
+          <div className="flex-1">
+            <Slider
+              id="nameSpacing"
+              aria-label="Name spacing"
+              value={[nameSpacing]}
+              min={0}
+              max={24}
+              step={1}
+              onValueChange={async (values: number[]) => {
+                await Config.set("nameSpacing", values[0] ?? nameSpacing);
+                await emit("config_update", await Config.getConfig());
+              }}
+            />
+          </div>
+          <div className="w-16 text-right">
+            <span className="text-sm">{nameSpacing} px</span>
           </div>
         </div>
       </div>

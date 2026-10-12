@@ -1,8 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { FTUE_PIN_TRAY_TIP_KEY } from "@/constants";
-import { exit } from "@tauri-apps/plugin-process";
 import * as dateFns from "date-fns";
-import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 
 import { invoke } from "@tauri-apps/api/core";
 import { usePlatformInfo } from "@/hooks/use-platform-info";
@@ -317,8 +315,7 @@ export const Account = () => {
               <form
                 onSubmit={async event => {
                   event.preventDefault();
-                  await saveWindowState(StateFlags.POSITION && StateFlags.SIZE);
-                  await exit();
+                  await invoke("quit_application");
                 }}
               >
                 <DialogHeader>

@@ -1,5 +1,6 @@
 import Config, { type OverlayedConfig, type PlacementAnchor } from "@/config";
 import { invoke } from "@tauri-apps/api/core";
+import { PhysicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -33,13 +34,16 @@ interface PlacementRequest extends PlacementParameters {
   height: number;
 }
 
-const mainWindow = getCurrentWebviewWindow().label === "main";
+const appWindow = getCurrentWebviewWindow();
+const mainWindow = appWindow.label === "main";
 // Mirrors the main window size in tauri.conf.json.
 const DEFAULT_WINDOW_SIZE = { width: 420, height: 600 };
 // Keeps navbar buttons above the 200px breakpoint.
 const NAVBAR_MIN_WIDTH = 220;
 // Small bounds for an empty voice channel.
 const EMPTY_CONTENT_SIZE = { width: 64, height: 52 };
+const DEFAULT_USER_ROWS = 8;
+const DEFAULT_USER_ROW_HEIGHT = 36;
 // Leaves room for fractional-DPI rounding.
 const FIT_HEADROOM = 1;
 
@@ -254,6 +258,74 @@ export const usePlacement = (pin: boolean, pathname: string) => {
     document.documentElement.classList.toggle("placement-display", channelPlacement);
     return () => document.documentElement.classList.remove("placement-display");
   }, [channelPlacement]);
+
+  useEffect(() => {
+    if (!mainWindow || mode !== "manual" || pathname !== "/channel") return;
+    const root = rootRef.current;
+    if (!root) return;
+    let frame = 0;
+    let lastHeight = 0;
+
+    const resizeToContent = async () => {
+      frame = 0;
+      const content = root.querySelector<HTMLElement>("[data-placement-content]");
+      const navbar = root.querySelector<HTMLElement>("[data-placement-navbar]");
+      if (!content || !navbar) return;
+
+      const rows = [...root.querySelectorAll<HTMLElement>("[data-auto-height-row], [data-auto-height-summary]")];
+      const contentStyle = getComputedStyle(content);
+      const rowBottom = rows.reduce((bottom, row) => Math.max(bottom, row.offsetTop + row.offsetHeight), 0);
+      const rowHeight = rows.reduce((height, row) => Math.max(height, row.offsetHeight), DEFAULT_USER_ROW_HEIGHT);
+      const reservedRowsHeight =
+        parseFloat(contentStyle.paddingTop) + rowHeight * DEFAULT_USER_ROWS + parseFloat(contentStyle.paddingBottom);
+      const height =
+        Math.ceil(
+          Math.max(
+            EMPTY_CONTENT_SIZE.height,
+            navbar.offsetHeight +
+              Math.max(rowBottom, reservedRowsHeight) +
+              parseFloat(getComputedStyle(root).borderTopWidth) +
+              parseFloat(getComputedStyle(root).borderBottomWidth)
+          )
+        ) + FIT_HEADROOM;
+
+      if (height === lastHeight) return;
+      try {
+        const [size, scaleFactor] = await Promise.all([appWindow.outerSize(), appWindow.scaleFactor()]);
+        const physicalHeight = Math.round(height * scaleFactor);
+        if (size.height === physicalHeight) {
+          lastHeight = height;
+          return;
+        }
+        await appWindow.setSize(new PhysicalSize(size.width, physicalHeight));
+        lastHeight = height;
+      } catch (error) {
+        console.warn("Could not resize overlay to fit channel users", error);
+      }
+    };
+
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(() => void resizeToContent());
+    };
+    const resize = new ResizeObserver(schedule);
+    const mutations = new MutationObserver(schedule);
+    const observe = () => {
+      root
+        .querySelectorAll<HTMLElement>("[data-auto-height-row], [data-auto-height-summary], [data-placement-navbar]")
+        .forEach(element => {
+          resize.observe(element);
+        });
+      schedule();
+    };
+
+    mutations.observe(root, { childList: true, subtree: true, attributes: true, characterData: true });
+    observe();
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }, [mode, pathname]);
 
   useEffect(() => {
     if (!mainWindow || !mode || supported === null) return;

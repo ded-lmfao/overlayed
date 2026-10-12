@@ -37,6 +37,7 @@ tauri-plugin-http = "2.2.0"
 tauri-plugin-log = "2.2.0"
 tauri-plugin-notification = "2.2.0"
 tauri-plugin-opener = "2.2.0"
+tauri-plugin-global-shortcut = "=2.2.0"
 anyhow = "1.0.86"
 log = "0.4.22"
 

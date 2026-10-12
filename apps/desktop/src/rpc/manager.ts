@@ -119,6 +119,7 @@ class SocketManager {
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
   private resyncTimeout: ReturnType<typeof setTimeout> | null = null;
   private resyncNonce: string | null = null;
+  private resyncAgain = false;
   private missedResyncs = 0;
   private reconnectAttempt = 0;
   private acceptedConnections: number[] = [];
@@ -205,6 +206,7 @@ class SocketManager {
     if (this.resyncTimeout !== null) clearTimeout(this.resyncTimeout);
     this.resyncTimer = this.resyncTimeout = null;
     this.resyncNonce = null;
+    this.resyncAgain = false;
     this.missedResyncs = 0;
   }
 
@@ -265,7 +267,13 @@ class SocketManager {
   }
 
   private resync() {
-    if (!this.authenticated || !this.isConnected || this.resyncNonce !== null) return;
+    if (!this.authenticated || !this.isConnected) return;
+    if (this.resyncNonce !== null) {
+      this.resyncAgain = true;
+      return;
+    }
+    if (this.resyncTimer !== null) clearTimeout(this.resyncTimer);
+    this.resyncTimer = null;
     const generation = this.generation;
     const nonce = `resync:${uuid.v4()}`;
     this.resyncNonce = nonce;
@@ -296,6 +304,28 @@ class SocketManager {
         this.store.setCurrentChannel(channel);
       }
     } else if (channel) {
+      // Unscoped voice events are reconciled from snapshots; retain join history
+      // by comparing membership only within the same channel.
+      const previousUsers = this.store.users;
+      const incomingIds = new Set(channel.voice_states.map(user => user.user.id));
+      for (const user of channel.voice_states) {
+        if (!previousUsers[user.user.id] && user.user.id !== this.store.me?.id) {
+          void emit(Event.UserLogUpdate, {
+            ...createUserStateItem(user),
+            event: "join",
+            timestamp: Date.now(),
+          }).catch(error => console.warn("Could not record voice join", error));
+        }
+      }
+      for (const user of Object.values(previousUsers)) {
+        if (!incomingIds.has(user.id) && user.id !== this.store.me?.id) {
+          void emit(Event.UserLogUpdate, {
+            ...user,
+            event: "leave",
+            timestamp: Date.now(),
+          }).catch(error => console.warn("Could not record voice leave", error));
+        }
+      }
       // Apply the snapshot atomically. Existing speakers retain their flags;
       // newcomers start silent and users absent from the reply are removed.
       appStore.setState(state => ({
@@ -386,9 +416,9 @@ class SocketManager {
 
     const payload: DiscordPayload = JSON.parse(event.data);
 
-    if (payload.cmd === RPCCommand.GET_SELECTED_VOICE_CHANNEL && payload.nonce?.startsWith("resync:")) {
+    if (payload.cmd === RPCCommand.GET_SELECTED_VOICE_CHANNEL) {
       // A delayed reply to a timed-out probe must not enter the normal handler.
-      if (payload.nonce !== this.resyncNonce) return;
+      if (!this.resyncNonce || payload.nonce !== this.resyncNonce) return;
       if (payload.evt === RPCEvent.ERROR) {
         this.connectionLost("Selected-channel resync failed", generation);
         return;
@@ -403,8 +433,33 @@ class SocketManager {
         this.connectionLost("Invalid selected-channel reply", generation);
         return;
       }
-      this.scheduleResync();
+      if (this.resyncAgain) {
+        this.resyncAgain = false;
+        this.resync();
+      } else {
+        this.scheduleResync();
+      }
       return;
+    }
+
+    // Subscription acknowledgements carry evt too, but are not voice events.
+    if (payload.cmd === RPCCommand.SUBSCRIBE || payload.cmd === RPCCommand.UNSUBSCRIBE) return;
+
+    if (SUBSCRIBABLE_EVENTS.some(evt => evt === payload.evt)) {
+      if (payload.cmd !== RPCCommand.DISPATCH || !this.authenticated) return;
+      if (!this.currentChannelId) {
+        if (this.resyncNonce) this.resyncAgain = true;
+        return;
+      }
+      if (payload.data?.channel_id && payload.data.channel_id !== this.currentChannelId) return;
+      const speaking = payload.evt === RPCEvent.SPEAKING_START || payload.evt === RPCEvent.SPEAKING_STOP;
+      // Some RPC voice payloads lack a channel ID. Never merge those into the
+      // roster: they can still be queued from the channel we just left.
+      if (!speaking && !payload.data?.channel_id) {
+        this.resync();
+        return;
+      }
+      if (!speaking && this.resyncNonce) this.resyncAgain = true;
     }
 
     // TODO: we need a client side logger with levels too so that we can enable this
@@ -424,12 +479,10 @@ class SocketManager {
     if (payload.evt === RPCEvent.VOICE_STATE_DELETE) {
       // if its my user clear the channel
       if (payload.data.user.id === this.store.me?.id) {
-        this.store.clearUsers();
-
-        // we left the channel so we need to unsub for events
-        if (this.store.currentChannel) {
-          this.channelEvents(RPCCommand.UNSUBSCRIBE, this.store.currentChannel.id);
-        }
+        this.stopResync();
+        this.reconcileChannel(null);
+        this.requestUserChannel();
+        return;
       }
 
       this.store.removeUser(payload.data.user.id);
@@ -464,30 +517,13 @@ class SocketManager {
 
     // VOICE_CHANNEL_SELECT	sent when the client joins a voice channel
     if (payload.evt === RPCEvent.VOICE_CHANNEL_SELECT) {
-      if (payload.data.channel_id === null) {
-        this.store.clearUsers();
-
-        if (this.store.currentChannel) {
-          this.channelEvents(RPCCommand.UNSUBSCRIBE, this.store.currentChannel.id);
-        }
-
-        // after unsub we clear the channel
-        this.store.setCurrentChannel(null);
-      }
-
-      // try to find the user
-      this.requestUserChannel();
-
-      // TODO: is this needed cause it's just the id for some reason
-      this.store.setCurrentChannel(payload.data.channel_id);
-      if (payload.data?.channel_id) {
-        this.send({
-          cmd: RPCCommand.GET_CHANNEL,
-          args: {
-            channel_id: payload.data.channel_id,
-          },
-        });
-      }
+      if (payload.cmd !== RPCCommand.DISPATCH || !this.authenticated) return;
+      // Invalidate outstanding snapshots before switching. Clear subscriptions
+      // and members immediately, instead of waiting for the next response.
+      this.stopResync();
+      this.reconcileChannel(null);
+      if (payload.data?.channel_id) this.requestUserChannel();
+      else this.scheduleResync();
 
       // track user joining a channel
       track(Metric.ChannelJoin, 1);
@@ -508,19 +544,6 @@ class SocketManager {
 
       // login with the token
       this.login(text.access_token);
-    }
-
-    // GET_SELECTED_VOICE_CHANNEL	used to get the current voice channel the client is in
-    if (payload.cmd === RPCCommand.GET_SELECTED_VOICE_CHANNEL) {
-      if (payload.data?.id) {
-        // sub to channel events
-        this.channelEvents(RPCCommand.SUBSCRIBE, payload.data.id);
-        // set all the user in the channel
-        this.store.setUsers(payload.data.voice_states);
-
-        // set the current channel
-        this.store.setCurrentChannel(payload.data);
-      }
     }
 
     // console.log(payload);
@@ -594,13 +617,9 @@ class SocketManager {
     }
 
     if (payload.evt === RPCEvent.SPEAKING_START || payload.evt === RPCEvent.SPEAKING_STOP) {
-      const isSpeaking = payload.evt !== RPCEvent.SPEAKING_START;
-      if (this.store.users[payload.data.user_id]) this.store.setTalking(payload.data.user_id, !isSpeaking);
-    }
-
-    // when we move channels we get a new list of users
-    if (payload.cmd === RPCCommand.GET_CHANNEL) {
-      this.requestUserChannel();
+      if (this.store.users[payload.data.user_id]) {
+        this.store.setTalking(payload.data.user_id, payload.evt === RPCEvent.SPEAKING_START);
+      }
     }
   }
 
@@ -610,9 +629,7 @@ class SocketManager {
    *
    */
   private requestUserChannel() {
-    this.send({
-      cmd: RPCCommand.GET_SELECTED_VOICE_CHANNEL,
-    });
+    this.resync();
   }
 
   /** Get the soundboard items */
@@ -642,7 +659,7 @@ class SocketManager {
   /**
    * These method will allow you to sub/unsub to channel events
    * that are defined in SUBSCRIBABLE_EVENTS
-   * @param cmd {RPCCommand} SUBSCRIBE or SUBSCRIBE
+   * @param cmd {RPCCommand} SUBSCRIBE or UNSUBSCRIBE
    * @param channelId The channel to subscribe to events in
    */
   channelEvents(cmd: RPCCommand.SUBSCRIBE | RPCCommand.UNSUBSCRIBE, channelId: string) {

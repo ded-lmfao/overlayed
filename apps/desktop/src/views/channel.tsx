@@ -3,18 +3,12 @@ import { User } from "../components/user";
 import { cn } from "@/utils/tw";
 import { useAppStore } from "../store";
 import { useConfigValue } from "@/hooks/use-config-value";
-import { getChannelName } from "@/utils/channel";
+import { useEffect, useState } from "react";
 
-export const ChannelView = ({
-  alignDirection,
-  anchored,
-  displayOnly,
-}: {
-  alignDirection: DirectionLR;
-  anchored: boolean;
-  displayOnly: boolean;
-}) => {
-  const { users, me, currentChannel } = useAppStore();
+const VISIBLE_USER_LIMIT = 8;
+
+export const ChannelView = ({ alignDirection, anchored }: { alignDirection: DirectionLR; anchored: boolean }) => {
+  const { users, me } = useAppStore();
 
   const { value: showOnlyTalkingUsers } = useConfigValue("showOnlyTalkingUsers");
   const { value: showOwnUser } = useConfigValue("showOwnUser");
@@ -33,8 +27,44 @@ export const ChannelView = ({
     return true;
   });
 
-  const channelName = getChannelName(currentChannel);
-  const rows = userList.map(([, item]) => (
+  const [visibleIds, setVisibleIds] = useState(() => userList.slice(0, VISIBLE_USER_LIMIT).map(([id]) => id));
+
+  useEffect(() => {
+    const available = new Map(userList);
+    const nextIds = visibleIds.filter(id => available.has(id));
+
+    for (const [id] of userList) {
+      if (nextIds.length >= VISIBLE_USER_LIMIT) break;
+      if (!nextIds.includes(id)) nextIds.push(id);
+    }
+
+    for (const [id, item] of userList) {
+      if (!item.talking || nextIds.includes(id)) continue;
+      let replaceIndex = -1;
+      for (let index = nextIds.length - 1; index >= 0; index--) {
+        const visibleId = nextIds[index];
+        if (visibleId && !available.get(visibleId)?.talking) {
+          replaceIndex = index;
+          break;
+        }
+      }
+      if (replaceIndex === -1) break;
+      nextIds.splice(replaceIndex, 1);
+      nextIds.unshift(id);
+    }
+
+    if (nextIds.length > VISIBLE_USER_LIMIT) nextIds.length = VISIBLE_USER_LIMIT;
+    if (nextIds.length !== visibleIds.length || nextIds.some((id, index) => id !== visibleIds[index])) {
+      setVisibleIds(nextIds);
+    }
+  }, [userList, visibleIds]);
+
+  const visibleUsers = visibleIds
+    .map(id => userList.find(([userId]) => userId === id))
+    .filter((entry): entry is [string, (typeof userList)[number][1]] => entry !== undefined);
+  const hiddenUserCount = userList.length - visibleUsers.length;
+
+  const rows = visibleUsers.map(([, item]) => (
     <User
       key={item.id}
       item={item}
@@ -45,6 +75,22 @@ export const ChannelView = ({
       anchored={anchored}
     />
   ));
+  if (hiddenUserCount > 0) {
+    rows.push(
+      <div
+        key="hidden-users"
+        data-auto-height-summary
+        className={cn(
+          "flex items-center justify-start gap-2 px-2",
+          alignDirection === "right" ? "flex-row-reverse" : "flex-row"
+        )}
+        aria-label={`${hiddenUserCount} more users`}
+      >
+        <div className="pointer-events-none relative h-6 w-6 shrink-0 rounded-full border-2 border-zinc-800 bg-zinc-900" />
+        <span className="rounded-md bg-zinc-800 p-1 px-2 text-xs text-zinc-400">{hiddenUserCount} others</span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -61,7 +107,7 @@ export const ChannelView = ({
       }
     >
       <div
-        data-placement-content={anchored ? "" : undefined}
+        data-placement-content
         className={
           anchored
             ? cn("flex flex-col w-max shrink-0 overflow-hidden py-2", {
@@ -80,18 +126,6 @@ export const ChannelView = ({
         }
         style={anchored ? undefined : { maxHeight: "100%" }}
       >
-        {displayOnly && channelName && (
-          <div
-            className="mx-2 mb-1 max-w-[280px] truncate rounded-md px-2 py-1 text-xs font-semibold text-white"
-            title={channelName}
-            style={{
-              opacity: opacityTarget === "all" ? opacity / 100 : 1,
-              backgroundColor: `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})`,
-            }}
-          >
-            {channelName}
-          </div>
-        )}
         {anchored ? (
           <div
             className={cn("flex w-max shrink-0 overflow-hidden", {

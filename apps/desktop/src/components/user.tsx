@@ -55,6 +55,8 @@ export const User = ({
   }
 
   const { value: maxUsernameLength } = useConfigValue("maxUsernameLength");
+  const { value: nameSpacing } = useConfigValue("nameSpacing");
+  const rowPadding = (Number.isFinite(nameSpacing) ? Math.min(24, Math.max(0, nameSpacing)) : 4) / 2;
 
   const displayName = (() => {
     const name = item.username ?? "";
@@ -99,14 +101,17 @@ export const User = ({
   const row = (
     <div
       ref={rowRef}
+      data-auto-height-row
       data-placement-row={anchored ? "" : undefined}
       className={cn(
-        "flex gap-2 py-1 p-2 justify-start items-center transition-opacity",
+        "flex gap-2 px-2 justify-start items-center transition-opacity",
         alignDirection == "right" ? "flex-row-reverse" : "flex-row",
         anchored ? "w-max shrink-0" : undefined,
         anchored && alignDirection === "center" ? "pb-2" : undefined
       )}
       style={{
+        paddingTop: rowPadding,
+        paddingBottom: anchored && alignDirection === "center" ? 8 : rowPadding,
         ...(opacityTarget === "all" ? { opacity: opacityStyle } : {}),
         transform: scaleFactor !== 1 ? `scale(${scaleFactor})` : undefined,
         transformOrigin: scaleFactor !== 1 ? (anchored ? "top left" : transformOrigin) : undefined,

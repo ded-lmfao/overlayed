@@ -15,7 +15,6 @@ import Config, { type DirectionLR } from "../config";
 import { useAppStore } from "../store";
 import { useState } from "react";
 import { FTUE_PIN_TRAY_TIP_KEY } from "@/constants";
-import { getChannelName } from "@/utils/channel";
 import { cn } from "@/utils/tw";
 import { Metric, track } from "@/metrics";
 import { invoke } from "@tauri-apps/api/core";
@@ -66,9 +65,8 @@ export const NavBar = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentChannel, me } = useAppStore();
+  const { me } = useAppStore();
 
-  const [channelName, setChannelName] = useState<string>();
   const [currentAlignment, setCurrentAlignment] = useState(mapping[alignDirection]);
 
   // keep local currentAlignment in sync when the prop changes (e.g., loaded from config)
@@ -103,10 +101,6 @@ export const NavBar = ({
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  useEffect(() => {
-    setChannelName(getChannelName(currentChannel));
-  }, [location.pathname, currentChannel]);
-
   function getTrayHint(os: string): React.ReactNode {
     if (os === "windows") {
       return (
@@ -114,8 +108,8 @@ export const NavBar = ({
           Pinning hides this frame to only show the users in the call.
           <br />
           <br />
-          Unpin or access Settings anytime via the <strong className="text-white">system tray</strong> icon in the near
-          the clock in your taskbar.
+          Press <strong className="text-white">Alt+D</strong> to unpin, or right-click the
+          <strong className="text-white"> system tray</strong> icon near the clock (check the ^ hidden-icons menu).
         </>
       );
     }
@@ -125,8 +119,8 @@ export const NavBar = ({
           Pinning hides this frame to only show the users in the call.
           <br />
           <br />
-          Unpin or access Settings anytime via the <strong className="text-white">menu bar</strong> icon in the
-          top-right of your screen.
+          Press <strong className="text-white">Option+D</strong> to unpin, or use the
+          <strong className="text-white"> menu bar</strong> icon in the top-right of your screen.
         </>
       );
     }
@@ -135,38 +129,31 @@ export const NavBar = ({
         Pinning hides this frame to only show the users in the call.
         <br />
         <br />
-        Unpin or access Settings anytime via the <strong className="text-white">system tray</strong> /{" "}
-        <strong className="text-white">notification area</strong> icon.
+        Press <strong className="text-white">Alt+D</strong> to unpin, or use the{" "}
+        <strong className="text-white">system tray</strong> / <strong className="text-white">notification area</strong>{" "}
+        icon.
       </>
     );
   }
 
+  const draggable = !anchored || !pin;
   return (
     <div
       data-placement-navbar
-      className={`${opacity} ${anchored ? "shrink-0" : "cursor-move"} rounded-t-lg font-bold select-none bg-white dark:bg-zinc-900 pr-3 pl-3 p-2`}
+      className={`${opacity} ${draggable ? "cursor-move" : "shrink-0"} rounded-t-lg font-bold select-none bg-white dark:bg-zinc-900 pr-3 pl-3 p-2`}
     >
-      <div data-tauri-drag-region={anchored ? undefined : true} className="flex justify-between">
+      <div data-tauri-drag-region={draggable ? true : undefined} className="flex justify-between">
         <div className={cn("flex items-center", anchored && "min-w-0")}>
           <img
             src={canary ? "/img/32x32-canary.png" : "/img/32x32.png"}
             alt="logo"
-            data-tauri-drag-region={anchored ? undefined : true}
+            data-tauri-drag-region={draggable ? true : undefined}
             className={cn("w-8 h-8 mr-2", anchored && "shrink-0")}
           />
 
-          {channelName ? (
-            <div
-              data-tauri-drag-region={anchored ? undefined : true}
-              className={cn("hidden md:inline", anchored && "truncate")}
-            >
-              {channelName}
-            </div>
-          ) : (
-            <div data-tauri-drag-region={anchored ? undefined : true} className={anchored ? "truncate" : undefined}>
-              Overlayed
-            </div>
-          )}
+          <div data-tauri-drag-region={draggable ? true : undefined} className={anchored ? "truncate" : undefined}>
+            Overlayed
+          </div>
         </div>
         {location.pathname !== "/settings" && (
           <div className={cn("hidden gap-4 md:flex", anchored && "shrink-0")}>

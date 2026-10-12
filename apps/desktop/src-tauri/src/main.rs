@@ -23,6 +23,7 @@ use std::{
 };
 use tauri::{generate_handler, menu::Menu, LogicalSize, Manager, Wry};
 use tauri_plugin_log::{Target, TargetKind};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use tray::Tray;
 use window_custom::WebviewWindowExt;
@@ -93,6 +94,7 @@ fn main() {
     .level_for("tao", log::LevelFilter::Off);
 
   let mut app = tauri::Builder::default()
+    .plugin(tauri_plugin_global_shortcut::Builder::new().build())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(window_state_plugin.build())
@@ -161,7 +163,31 @@ fn main() {
       }
 
       // update the system tray
-      Tray::update_tray(app.app_handle());
+      // Never allow a click-through overlay to start without its recovery menu.
+      Tray::update_tray(app.app_handle())?;
+
+      // Recovery must outlive webview reloads and React effect lifetimes.
+      for shortcut in ["Alt+D", "CommandOrControl+Shift+O"] {
+        if let Err(error) = app.global_shortcut().on_shortcut(shortcut, move |app, _, event| {
+          if event.state != ShortcutState::Pressed {
+            return;
+          }
+          if shortcut == "Alt+D" {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_NAME) {
+              toggle_pin(window, app.state::<Pinned>(), app.state::<TrayMenu>(), app.state::<HideTaskbarWhenPinned>());
+            }
+          } else if let Some(settings) = app.get_webview_window(SETTINGS_WINDOW_NAME) {
+            for result in [settings.show(), settings.unminimize(), settings.set_focus()] {
+              if let Err(error) = result {
+                log::warn!("Could not open Settings from shortcut: {error}");
+              }
+            }
+          }
+        }) {
+          log::error!("Could not register recovery shortcut {shortcut}: {error}");
+          settings.show().ok();
+        }
+      }
 
       // NOTE: always force settings window to be a certain size
       settings.set_size(LogicalSize {
@@ -182,6 +208,7 @@ fn main() {
       open_settings,
       set_hide_taskbar_when_pinned,
       open_config_dir,
+      quit_application,
       placement::get_monitors,
       placement::apply_placement,
       placement::release_placement,
@@ -205,9 +232,7 @@ fn main() {
             }
 
             if label == MAIN_WINDOW_NAME {
-              // Save state on close
-              app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
-              std::process::exit(0);
+              quit_application(app.clone());
             } else {
               api.prevent_close();
             }

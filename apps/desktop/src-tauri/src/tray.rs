@@ -2,12 +2,11 @@ use std::sync::Mutex;
 
 use tauri::{
   menu::{Menu, MenuBuilder, MenuEvent},
-  tray::TrayIconBuilder,
+  tray::{TrayIcon, TrayIconBuilder},
   AppHandle, LogicalSize, Manager, Wry,
 };
 
 use anyhow::Result;
-use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::{
   commands, toggle_pin, HideTaskbarWhenPinned, Pinned, TrayMenu, MAIN_WINDOW_NAME, OVERLAYED,
@@ -15,7 +14,10 @@ use crate::{
   TRAY_RELOAD, TRAY_SETTINGS, TRAY_SHOW_APP, TRAY_TOGGLE_PIN,
 };
 
-pub struct Tray;
+pub struct Tray {
+  // Keep the native icon alive for the lifetime of the application.
+  _icon: TrayIcon,
+}
 
 impl Tray {
   pub fn create_tray_menu(app_handle: &AppHandle) -> Result<Menu<Wry>, tauri::Error> {
@@ -38,12 +40,14 @@ impl Tray {
 
   pub fn update_tray(app_handle: &AppHandle) -> Result<()> {
     let menu = Tray::create_tray_menu(app_handle)?;
-    let _ = TrayIconBuilder::with_id(OVERLAYED)
+    let icon = TrayIconBuilder::with_id(OVERLAYED)
+      .icon(commands::tray_icon(false)?)
+      .tooltip("Overlayed — right-click to unpin or quit")
       .menu(&menu)
       .on_menu_event(Self::handle_menu_events)
       .build(app_handle)?;
     app_handle.manage(TrayMenu(Mutex::new(menu)));
-    commands::update_tray_icon(app_handle, false);
+    app_handle.manage(Self { _icon: icon });
     Ok(())
   }
 
@@ -97,10 +101,7 @@ impl Tray {
         window.show().unwrap();
       }
       TRAY_QUIT => {
-        // NOTE: we only save position and size so that StateFlags::FULLSCREEN is not saved, as
-        // nspanels do not support it
-        app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
-        std::process::exit(0)
+        commands::quit_application(app.clone());
       }
       _ => {}
     }

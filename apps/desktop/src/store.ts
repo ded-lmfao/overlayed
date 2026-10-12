@@ -108,7 +108,8 @@ export const useAppStore = create<AppState & AppActions>()(
       }),
     setTalking: (id, talking) =>
       set(state => {
-        state.users[id]!.talking = talking;
+        const user = state.users[id];
+        if (user) user.talking = talking;
       }),
     removeUser: id =>
       set((state: AppState) => {
@@ -116,7 +117,12 @@ export const useAppStore = create<AppState & AppActions>()(
       }),
     updateUser: item =>
       set((state: AppState) => {
-        state.users[item.user.id] = createUserStateItem(item);
+        const previous = state.users[item.user.id];
+        state.users[item.user.id] = {
+          ...createUserStateItem(item),
+          talking: previous?.talking ?? false,
+          lastUpdate: previous?.lastUpdate ?? 0,
+        };
       }),
     setUsers: users =>
       set(state => {

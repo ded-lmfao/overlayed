@@ -34,6 +34,7 @@ export interface OverlayedConfig {
   opacityTarget: OpacityTarget;
   maxUsernameLength: number;
   userScale: number;
+  nameSpacing: number;
   hideTaskbarWhenPinned: boolean;
   placementMode: PlacementMode;
   placementMonitor: string | null;
@@ -58,6 +59,7 @@ export const DEFAULT_OVERLAYED_CONFIG: OverlayedConfig = {
   opacityTarget: "all",
   maxUsernameLength: 40,
   userScale: 100,
+  nameSpacing: 4,
   hideTaskbarWhenPinned: false,
   placementMode: "manual",
   placementMonitor: null,

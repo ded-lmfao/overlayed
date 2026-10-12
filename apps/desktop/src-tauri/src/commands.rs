@@ -4,8 +4,20 @@ use std::{
 };
 
 use tauri::{image::Image, menu::Menu, AppHandle, Emitter, Manager, State, WebviewWindow, Wry};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::{constants::*, HideTaskbarWhenPinned, Pinned, TrayMenu};
+
+#[tauri::command]
+pub fn quit_application(app: AppHandle) {
+  // Anchored bounds are temporary; preserve the last saved manual bounds.
+  if !app.state::<crate::placement::PlacementState>().is_active() {
+    if let Err(error) = app.save_window_state(StateFlags::POSITION | StateFlags::SIZE) {
+      log::warn!("Could not save window state before quitting: {error}");
+    }
+  }
+  app.exit(0);
+}
 
 #[tauri::command]
 pub fn open_settings(window: WebviewWindow, update: bool) {
@@ -147,21 +159,16 @@ fn _set_pin(
   menu: State<TrayMenu>,
   hide_taskbar: State<HideTaskbarWhenPinned>,
 ) {
-  // @d0nutptr cooked here
+  // Restore mouse input before notifying webviews; a failed event must not trap
+  // the user in a click-through window.
+  if let Err(error) = window.set_ignore_cursor_events(value) {
+    log::error!("Could not change overlay pin state: {error}");
+    return;
+  }
   pinned.store(value, std::sync::atomic::Ordering::Relaxed);
 
-  // emit to the main window and also broadcast to all webviews so other
-  // windows (like settings) can react to the change.
-  window.emit(TRAY_TOGGLE_PIN, value).unwrap();
-
-  // Broadcast the pin change to all webviews so other
-  // windows (like settings) can react to the change.
-  let app_handle = window.app_handle();
-  if let Some(main_win) = app_handle.get_webview_window(MAIN_WINDOW_NAME) {
-    let _ = main_win.emit(TRAY_TOGGLE_PIN, value);
-  }
-  if let Some(settings_win) = app_handle.get_webview_window(SETTINGS_WINDOW_NAME) {
-    let _ = settings_win.emit(TRAY_TOGGLE_PIN, value);
+  if let Err(error) = window.app_handle().emit(TRAY_TOGGLE_PIN, value) {
+    log::warn!("Could not notify windows of the pin change: {error}");
   }
 
   // invert the label for the tray
@@ -189,8 +196,6 @@ fn _set_pin(
     }
   });
 
-  window.set_ignore_cursor_events(value);
-
   apply_taskbar_visibility(
     &window.app_handle(),
     value,
@@ -201,16 +206,30 @@ fn _set_pin(
   update_tray_icon(window.app_handle(), value);
 }
 
-pub fn update_tray_icon(app: &AppHandle, pinned: bool) {
-  let icon_bytes = if pinned {
-    include_bytes!("../icons/tray/icon-pinned.ico").as_slice()
-  } else {
-    include_bytes!("../icons/tray/icon.ico").as_slice()
-  };
+pub fn tray_icon(_pinned: bool) -> tauri::Result<Image<'static>> {
+  Image::from_bytes(include_bytes!("../icons/stable/32x32.png"))
+}
 
+pub fn update_tray_icon(app: &AppHandle, pinned: bool) {
   if let Some(tray) = app.tray_by_id(OVERLAYED) {
-    if let Ok(icon) = Image::from_bytes(icon_bytes) {
-      tray.set_icon(Some(icon));
+    if let Err(error) = tray_icon(pinned).and_then(|icon| tray.set_icon(Some(icon))) {
+      log::warn!("Could not update the tray icon: {error}");
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn both_tray_icons_decode_with_the_enabled_image_features() {
+    for pinned in [false, true] {
+      let icon =
+        super::tray_icon(pinned).expect("tray icon must decode before pinning is available");
+      assert!(icon.width() > 0 && icon.height() > 0);
+      assert_eq!(
+        icon.rgba().len(),
+        (icon.width() * icon.height() * 4) as usize
+      );
     }
   }
 }

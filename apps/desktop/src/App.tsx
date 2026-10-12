@@ -11,6 +11,7 @@ import { useStartPinned } from "./hooks/use-start-pinned";
 import { useAlign } from "./hooks/use-align";
 import { useDisableWebFeatures } from "./hooks/use-disable-context-menu";
 import { useUpdate } from "./hooks/use-update";
+import { useKeybinds } from "./hooks/use-keybinds";
 import { useAppStore } from "./store";
 import { Toaster } from "./components/ui/toaster";
 import { useEffect } from "react";
@@ -22,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 function App() {
   useDisableWebFeatures();
   useSocket();
+  useKeybinds();
 
   useEffect(() => {
     const styleForLog = "font-size: 20px; color: #00dffd";
@@ -72,10 +74,7 @@ function App() {
       )}
       <Routes>
         <Route path="/" element={<MainView />} />
-        <Route
-          path="/channel"
-          element={<ChannelView alignDirection={horizontal} anchored={anchored} displayOnly={displayOnly} />}
-        />
+        <Route path="/channel" element={<ChannelView alignDirection={horizontal} anchored={anchored} />} />
         <Route path="/settings" element={<SettingsView update={update} />} />
         <Route path="/error" element={<ErrorView anchored={anchored} />} />
       </Routes>
